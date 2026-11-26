@@ -1,5 +1,0 @@
-customHeaders:
-  - pattern: '/assets/*.js'
-    headers:
-      - key: 'Content-Type'
-        value: 'text/javascript; charset=utf-8'
