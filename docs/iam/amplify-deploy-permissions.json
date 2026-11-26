@@ -1,0 +1,18 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "amplify:CreateDeployment",
+        "amplify:StartDeployment"
+      ],
+      "Resource": "arn:aws:amplify:<REGION>:<ACCOUNT_ID>:apps/<APP_ID>/branches/<BRANCH_NAME>"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "amplify:GetJob",
+      "Resource": "arn:aws:amplify:<REGION>:<ACCOUNT_ID>:apps/<APP_ID>/branches/<BRANCH_NAME>/jobs/*"
+    }
+  ]
+}

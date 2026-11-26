@@ -1,0 +1,137 @@
+name: TaskFlow CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ci:
+    name: Continuous Integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Obtener el código
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Instalar dependencias
+        run: npm ci --no-audit --no-fund
+      - name: Ejecutar ESLint
+        run: npm run lint
+      - name: Validar TypeScript
+        run: npm exec --no -- tsc --noEmit
+      - name: Ejecutar Vitest
+        run: npm test
+      - name: Auditar dependencias
+        run: npm audit --audit-level=high
+      - name: Compilar TaskFlow
+        run: npm run build
+
+      - name: Crear ZIP y checksum SHA-256
+        shell: bash
+        run: |
+          test -f dist/index.html
+          mkdir -p release
+          archive="taskflow-${GITHUB_SHA}.zip"
+          (cd dist && zip -qr "../release/$archive" .)
+          (cd release && sha256sum "$archive" > "$archive.sha256")
+
+      - name: Publicar artefacto
+        id: upload
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: taskflow-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            release/taskflow-${{ github.sha }}.zip
+            release/taskflow-${{ github.sha }}.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  cd:
+    name: Continuous Deployment
+    needs: ci
+    if: >-
+      ${{ success() && github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' && vars.ENABLE_DEPLOYMENT == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: taskflow-amplify-production
+      cancel-in-progress: false
+    steps:
+      - name: Obtener el script de despliegue
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/deploy-amplify.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Descargar el artefacto de CI
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          artifact-ids: ${{ needs.ci.outputs.artifact-id }}
+          path: ${{ runner.temp }}/taskflow-release
+          digest-mismatch: error
+
+      - name: Verificar el checksum del ZIP
+        working-directory: ${{ runner.temp }}/taskflow-release
+        shell: bash
+        run: |
+          archive="taskflow-${GITHUB_SHA}.zip"
+          if ! sha256sum "$archive" | cmp -s - "$archive.sha256"; then
+            echo "::error::El checksum SHA-256 del ZIP no coincide."
+            exit 1
+          fi
+
+      - name: Comprobar que el commit sigue en main
+        id: current-main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head_sha=$(gh api --hostname github.com "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          if [[ "$head_sha" == "$GITHUB_SHA" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Se omite el despliegue porque main avanzó a otro commit."
+          fi
+
+      - name: Autenticarse en AWS mediante OIDC
+        if: steps.current-main.outputs.deploy == 'true'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: taskflow-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 1800
+          mask-aws-account-id: true
+
+      - name: Desplegar y comprobar TaskFlow
+        if: steps.current-main.outputs.deploy == 'true'
+        shell: bash
+        env:
+          AMPLIFY_APP_ID: ${{ vars.AMPLIFY_APP_ID }}
+          AMPLIFY_BRANCH_NAME: ${{ vars.AMPLIFY_BRANCH_NAME }}
+          AMPLIFY_SITE_URL: ${{ vars.AMPLIFY_SITE_URL }}
+          AWS_PAGER: ''
+        run: bash scripts/deploy-amplify.sh "$RUNNER_TEMP/taskflow-release/taskflow-${GITHUB_SHA}.zip"
