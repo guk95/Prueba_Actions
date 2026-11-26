@@ -48,14 +48,28 @@ done
 [[ "$deployed" == true ]] || fail 'Se agotó el tiempo de espera del despliegue.'
 printf '%s\n' 'Amplify confirmó el despliegue.'
 
+# El HTML de Vite contiene la ruta del módulo que debe poder cargar el navegador.
+module_pattern='<script[^>]*type="module"[^>]*src="(/assets/[A-Za-z0-9._-]+\.js)"'
+site_host="${AMPLIFY_SITE_URL#https://}"
+site_origin="https://${site_host%%/*}"
+
 for ((attempt = 1; attempt <= 6; attempt++)); do
-  if http_code=$(curl --disable --proto '=https' --proto-redir '=https' --globoff \
-    --silent --fail --location --max-redirs 5 --connect-timeout 5 --max-time 15 \
-    --output /dev/null --write-out '%{http_code}' -- "$AMPLIFY_SITE_URL") &&
-    [[ "$http_code" == 2[0-9][0-9] ]]; then
-    printf 'Sitio publicado disponible (HTTP %s).\n' "$http_code"
-    exit 0
+  if html=$(curl --disable --proto '=https' --globoff --silent --fail \
+    --connect-timeout 5 --max-time 15 -- "$AMPLIFY_SITE_URL") &&
+    [[ "$html" =~ $module_pattern ]]; then
+    module_path="${BASH_REMATCH[1]}"
+    if response=$(curl --disable --proto '=https' --globoff --silent --fail \
+      --connect-timeout 5 --max-time 15 --output /dev/null \
+      --write-out '%{http_code} %{content_type}' -- "$site_origin$module_path"); then
+      mime="${response#* }"
+      mime="${mime%%;*}"
+      if [[ "$response" == 2[0-9][0-9]\ * ]] &&
+        [[ "$mime" == text/javascript || "$mime" == application/javascript ]]; then
+        printf '%s\n' 'Sitio publicado y módulo JavaScript verificados.'
+        exit 0
+      fi
+    fi
   fi
   sleep 5
 done
-fail 'El sitio publicado no respondió con HTTP 2xx.'
+fail 'El sitio no devolvió el HTML de TaskFlow y su módulo con un MIME de JavaScript válido.'

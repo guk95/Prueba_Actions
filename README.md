@@ -36,7 +36,7 @@ Las tareas se guardan en el perfil y origen actuales del navegador. Si el almace
 
 El workflow [TaskFlow CI/CD](.github/workflows/ci-cd.yml) ejecuta CI con Node.js 22 en pushes a `main`, pull requests con destino a `main` y ejecuciones manuales. CI instala con `npm ci`, ejecuta ESLint, comprueba TypeScript, corre Vitest y bloquea vulnerabilidades altas y críticas con `npm audit --audit-level=high`. Si todas las comprobaciones pasan, compila y publica un artefacto con `taskflow-<SHA>.zip` y su checksum SHA-256. El ZIP contiene `index.html` en la raíz.
 
-CD requiere un push a `main`, CI exitoso y `ENABLE_DEPLOYMENT=true`. Descarga el artefacto de esa ejecución, verifica el checksum y usa credenciales temporales de AWS mediante OIDC. El [script de despliegue](scripts/deploy-amplify.sh) carga el ZIP por HTTPS, espera el estado `SUCCEED` de Amplify y comprueba que el sitio responda con HTTP 2xx. El job promociona el ZIP de CI directamente y serializa los despliegues sin cancelar el que está en curso. Antes de solicitar credenciales, comprueba que el commit siga en la punta de `main` para omitir ejecuciones atrasadas.
+CD requiere un push a `main`, CI exitoso y `ENABLE_DEPLOYMENT=true`. Descarga el artefacto de esa ejecución, verifica el checksum y usa credenciales temporales de AWS mediante OIDC. El [script de despliegue](scripts/deploy-amplify.sh) carga el ZIP por HTTPS, espera el estado `SUCCEED` de Amplify y comprueba que el sitio sirva el HTML y que el módulo principal responda con HTTP 2xx y un Content-Type de JavaScript. El job promociona el ZIP de CI directamente y serializa los despliegues sin cancelar el que está en curso. Antes de solicitar credenciales, comprueba que el commit siga en la punta de `main` para omitir ejecuciones atrasadas.
 
 ### Configuración manual en AWS
 
@@ -55,7 +55,12 @@ En **Settings → Secrets and variables → Actions → Variables**, crea las si
 | `AWS_ROLE_ARN` | ARN del rol IAM que confía en GitHub mediante OIDC. |
 | `AMPLIFY_APP_ID` | ID de la aplicación de Amplify Hosting. |
 | `AMPLIFY_BRANCH_NAME` | Rama de Amplify cubierta por la política del rol, por ejemplo `production`. |
-| `AMPLIFY_SITE_URL` | URL pública HTTPS del sitio, sin credenciales ni parámetros. |
+| `AMPLIFY_SITE_URL` | URL canónica HTTPS del sitio, accesible directamente y sin credenciales ni parámetros. |
 | `ENABLE_DEPLOYMENT` | Usa `false` mientras verificas CI. Cámbiala a `true` cuando autorices los despliegues. |
 
 Protege `main` con revisiones obligatorias y el check **Continuous Integration**. Verifica CI desde **Actions → TaskFlow CI/CD → Run workflow** y comprueba que el artefacto incluya el ZIP y el checksum. El primer push autorizado a `main` con CD habilitado inicia el despliegue.
+
+
+### Content-Type de los módulos JavaScript
+
+Vite copia `public/customHttp.yml` a la raíz de `dist/`. Amplify aplica el encabezado `Content-Type: text/javascript; charset=utf-8` a `/assets/*.js` al desplegar ese ZIP. Si configuraste encabezados adicionales en la consola de Amplify, incorpóralos al archivo para conservarlos, ya que la configuración incluida en el ZIP tiene prioridad. [Encabezados personalizados de Amplify](https://docs.aws.amazon.com/amplify/latest/userguide/setting-custom-headers.html)
